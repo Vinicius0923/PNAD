@@ -1,0 +1,365 @@
+---
+title: "PNAD"
+author: "Vinicius"
+date: "2025-06-14"
+output: html_document
+---
+#
+### Pesquisa Nacional por Amostra de Domicílios Contínua (PNAD)
+#
+Este documento descreve a metodologia aplicada para o tratamento, análise e geração de tabelas a partir dos microdados da PNAD Contínua (Pesquisa Nacional por Amostra de Domicílios Contínua), utilizando a linguagem R.
+#
+### Fonte de dados
+#
+https://www.ibge.gov.br/estatisticas/sociais/saude/9173-pesquisa-nacional-por-amostra-de-domicilios-continua-trimestral.html?=&t=microdados
+#
+### Bibliotecas
+#
+```{r}
+library(dplyr)      # Manipulação eficiente de dados (seleção, filtragem, agrupamento).
+library(readr)      # Leitura de arquivos em formatos como CSV.
+library(readxl)     # Leitura de planilhas Excel (.xlsx).
+library(writexl)    # Escrita de planilhas Excel.
+library(tidyverse)  # Conjunto de pacotes para manipulação e visualização de dados.
+library(PNADcIBGE)  # Leitura e rotulagem dos microdados da PNAD Contínua.
+library(survey)     # Análise estatística com amostras complexas (ponderações).
+library(stringr)    # Manipulação de strings.
+library(data.table) # Manipulação de grandes volumes de dados com alta performance.
+library(openxlsx)   # Leitura e escrita de arquivos Excel com mais controle de formatação.
+```
+#
+### Sobre a biblioteca PNAD
+#
+```{r}
+help("get_pnadc")
+```
+#
+### Diretório
+#
+```{r}
+setwd("D:/50_RStudio_Projetos/BI")
+```
+#
+### Importação e Preparação dos Dados
+#
+•	Leitura dos microdados da PNAD com *read_pnadc()*.
+•	Aplicação de rótulos com *pnadc_labeller()*.
+•	Conversão para *data.table* para maior eficiência.
+•	Criação de Variáveis Derivadas:*Conta_propria*, *CBO2*, *ECO*, *ID*, *Faixa*, *Tempo_Atividade*, *Loja*, *Fazenda* e *Posicao* foram criadas com base em regras lógicas e categorização de variáveis originais da PNAD.
+•	Junção com dicionário de ocupações para enriquecer a análise com descrições de cargos.
+#
+*read_pnadc*: Para a leitura dos dados
+*pnadc_labeller*: para leitura do dicionário
+#
+```{r}
+
+# 1. Carregar microdados e aplicar rótulos
+pnadc2025T02 <- read_pnadc("PNADC_032025.txt", "input_PNADC_trimestral.txt")
+pnadc2025T02 <- pnadc_labeller(pnadc2025T02, "dicionario_PNADC_microdados_trimestral.xls")
+
+# 2. Converter para data.table
+setDT(pnadc2025T02)
+
+# 3. Selecionar variáveis
+variaveis_selecionadas <- c(
+  "VD4012","VD4001","VD4003","VD4004","VD4004A","VD4005", "VD4009", "VD4008", "V4010", "VD4002", "VD4007", "V1022", "VD4010", "VD4011", "V2007", "V403311",
+  "V2010", "VD4036", "VD3004", "VD4016", "V405911", "V4040", "V40401", "V40402", "V40403", "V4041",
+  "V4019", "V4020", "V4021", "V4022", "UF", "V1023", "V1028", "V2009"
+)
+pnadc2025T02 <- pnadc2025T02[, ..variaveis_selecionadas]
+
+# 4. Criar variáveis derivadas
+pnadc2025T02[, VD4009 := as.character(VD4009)]
+pnadc2025T02[, Conta_propria := factor(
+  fifelse(VD4009 == "Conta-própria", "Conta-própria", "Outros"),
+  levels = c("Conta-própria", "Outros")
+)]
+
+pnadc2025T02[, CBO2 := factor(
+  fifelse(VD4011 == "Profissionais das ciências e intelectuais", "CBO2", "Outros"),
+  levels = c("CBO2", "Outros")
+)]
+
+pnadc2025T02[, ECO := factor(
+  fifelse(Conta_propria == "Conta-própria" & CBO2 == "Outros", "Eco_Popular", "Outros"),
+  levels = c("Eco_Popular", "Outros")
+)]
+
+pnadc2025T02[, ID := cut(V2009,
+  breaks = c(-Inf, 14, 17, 24, 29, 49, 59, Inf),
+  labels = c("Até 14 anos", "15 a 17 anos", "18 a 24 anos", "25 a 29 anos",
+             "30 a 49 anos", "50 a 59 anos", "60 anos ou mais"),
+  right = TRUE, include.lowest = TRUE
+)]
+
+pnadc2025T02[, Faixa := cut(V2009,
+  breaks = c(-Inf, 13, 29, 49, Inf),
+  labels = c("Até 13 anos", "De 14 a 29 anos", "De 30 a 49 anos", "Acima de 49 anos"),
+  right = TRUE, include.lowest = TRUE
+)]
+
+pnadc2025T02[, Tempo_Atividade := cut(V40403,
+  breaks = c(1, 4, 7, 10, Inf),
+  labels = c("De 2 a 4 anos", "De 5 a 7 anos", "De 8 a 10 anos", "Acima de 11 anos"),
+  right = TRUE
+)]
+
+pnadc2025T02[, Loja := factor(
+  fifelse(V4020 == "Em loja, escritório, galpão, etc.", "Em loja, escritório, galpão, etc.", "Outros"),
+  levels = c("Em loja, escritório, galpão, etc.", "Outros")
+)]
+
+pnadc2025T02[, Fazenda := factor(
+  fifelse(V4020 == "Em fazenda, sítio, granja, chácara, etc.", "Em fazenda, sítio, granja, chácara, etc.", "Outros"),
+  levels = c("Em fazenda, sítio, granja, chácara, etc.", "Outros")
+)]
+
+pnadc2025T02[, Posicao := fcase(
+  VD4009 %in% c(
+    "Empregado no setor privado com carteira de trabalho assinada",
+    "Trabalhador doméstico com carteira de trabalho assinada",
+    "Empregado no setor público com carteira de trabalho assinada"
+  ), "Com carteira de trabalho assinada",
+
+  VD4009 %in% c(
+    "Empregado no setor privado sem carteira de trabalho assinada",
+    "Trabalhador doméstico sem carteira de trabalho assinada",
+    "Empregado no setor público sem carteira de trabalho assinada"
+  ), "Sem carteira de trabalho assinada",
+
+  default = "Outros"
+)]
+pnadc2025T02[, Posicao := factor(Posicao, levels = c(
+  "Com carteira de trabalho assinada", "Sem carteira de trabalho assinada", "Outros"
+))]
+
+# Informal
+pnadc2025T02[, Informal := factor(
+  fifelse(
+    VD4009 %in% c(
+      "Empregado no setor privado sem carteira de trabalho assinada",
+      "Trabalhador doméstico sem carteira de trabalho assinada",
+      "Trabalhador familiar auxiliar"
+    ) | V4019 == "Não",
+    "Informal",
+    "Formal"
+  ),
+  levels = c("Informal", "Formal")
+)]
+
+# Local de Trabalho
+pnadc2025T02[, Local_Trabalho := fifelse(
+  V4022 != "Não tinha estabelecimento para funcionar", as.character(V4022),
+  fifelse(
+    V4020 == "Em loja, escritório, galpão, etc.", "Em loja, escritório, galpão, etc.",
+    fifelse(
+      V4020 == "Em fazenda, sítio, granja, chácara, etc.", "Em fazenda, sítio, granja, chácara, etc.",
+      as.character(V4022)  # garantir que é character
+    )
+  )
+)]
+
+### Loja = Corrigir ou excluir
+Loja1 <- as.numeric("V4020" == 1) - as.numeric("V4021" == 2)
+
+
+# 5. Carregar e preparar dicionário de ocupações
+dic_ocup <- read_excel("Estrutura_Ocupacao_COD.xls", range = "D3:E617")
+setDT(dic_ocup)
+setnames(dic_ocup, old = names(dic_ocup), new = c("Codigo", "Descricao"))
+dic_ocup[, Codigo := as.character(Codigo)]
+dic_ocup <- dic_ocup[!duplicated(Codigo)]
+
+# 6. Garantir tipo compatível para join
+pnadc2025T02[, V4010 := as.character(V4010)]
+
+# 7. Fazer merge com segurança
+pnadc2025T02 <- merge(
+  pnadc2025T02,
+  dic_ocup,
+  by.x = "V4010",
+  by.y = "Codigo",
+  all.x = TRUE
+)
+setnames(pnadc2025T02, "Descricao", "V4010_descricao")
+
+# Objeto final salvo no formato RDS, com o seguinte comando:
+saveRDS(pnadc2025T02,"pnadc2025T02")
+
+
+# Criar objeto survey
+pnadc_design <- svydesign(
+  ids = ~1,               # Amostragem simples (sem conglomerados)
+  weights = ~V1028,       # Peso amostral
+  data = pnadc2025T02     # Dados da PNAD
+)
+
+# Função para criar tabela com peso amostral (V1023)
+tabela_ponderada <- function(vars) {
+  round(svytable(as.formula(paste("~", paste(vars, collapse = " + "))), design = pnadc_design)) %>%
+    as.data.frame()
+}
+
+# Função para criar e pivotar a tabela ponderada com UF nas colunas
+tabela_ponderada_pivot <- function(vars) {
+  tab <- round(svytable(
+    as.formula(paste("~", paste(vars, collapse = " + "))),
+    design = pnadc_design
+  )) %>%
+    as.data.frame()
+  
+  return(tab)}
+
+
+```
+#
+### 1.Criar Tabelas histórico
+#
+```{r}
+library(dplyr)
+library(writexl)
+
+# Semestre
+semestre <- "3T25"
+
+# Tabelas do tipo CROSSTABS com coluna de semestre
+tabela1 <- tabela_ponderada_pivot(c("Informal", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela2 <- tabela_ponderada_pivot(c("VD4002", "VD4009", "ECO", "VD4012", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela3 <- tabela_ponderada_pivot(c("VD4002", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela4 <- tabela_ponderada_pivot(c("VD4001", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela5 <- tabela_ponderada_pivot(c("VD4003", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela6 <- tabela_ponderada_pivot(c("VD4004A", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+tabela7 <- tabela_ponderada_pivot(c("VD4005", "UF", "V1022", "V1023")) %>% mutate(Semestre = semestre)
+
+# Exportar para Excel em abas diferentes
+write_xlsx(
+  list(
+    "Informal" = tabela1,
+    "Global" = tabela2,
+    "Ocupacao" = tabela3,
+    "Força de trabalho" = tabela4,
+    "Força potencial" = tabela5,
+    "Subocupação" = tabela6,
+    "desalentadas" = tabela7
+  ),
+  path = "3T25.xlsx"
+)
+
+```
+#
+### 2.Criar Tabelas de variáveis originais da PNAD
+#
+```{r}
+# Tabelas do tipo CROSSTABS
+t1 <- tabela_ponderada(c("UF", "V1022", "VD4009", "V1023", "V4040"))
+t2 <- tabela_ponderada(c("UF", "V1022", "VD4009", "V1023", "V40403"))
+t3 <- tabela_ponderada(c("UF", "V1022", "VD4009", "V1023", "V40401"))
+t4 <- tabela_ponderada(c("UF", "V1022", "VD4009", "V1023", "V40402"))
+t5 <- tabela_ponderada(c("UF", "V1023", "VD4010", "V1022", "VD4008"))
+t6 <- tabela_ponderada(c("UF", "V1022", "VD4010", "V1023", "VD4009"))
+t7 <- tabela_ponderada(c("Posicao", "V1022", "UF", "V1023", "V403311"))
+t8 <- tabela_ponderada(c("VD3004", "V1022", "Posicao", "VD4002", "UF", "V1023"))
+t9 <- tabela_ponderada(c("UF", "V1022", "VD4009", "V1023", "Tempo_Atividade"))
+t10 <- tabela_ponderada(c("VD4036", "V1022", "Posicao", "UF", "V1023"))
+t11 <- tabela_ponderada(c("ID", "V1022", "Posicao", "VD4002", "UF", "V1023"))
+t12 <- tabela_ponderada(c("UF", "V1022", "VD4011", "V1023", "VD4009"))
+t13 <- tabela_ponderada(c("UF", "V1022", "V1023", "VD4008", "V4019"))
+
+
+# Exportar para Excel em abas diferentes
+write_xlsx(
+  list(
+    "Tempo1" = t1,
+    "Tempo2" = t9,
+    "Atividade1" = t5,
+    "Atividade2" = t6,
+    "Fx_Renda" = t7,
+    "instrucao" = t8,
+    "Horas" = t10,
+    "Idade" = t11,
+    "Atividade3" = t12,
+    "CNPJ" = t13
+  ),
+  path = "PNAD_Resumo2.xlsx"
+)
+
+```
+#
+### 3.Criar Tabelas para Economia Popular
+#
+```{r}
+# Tabelas CROSSTABS
+tabs <- list(
+  "Tempo1" = tabela_ponderada(c("UF", "V1022", "ECO", "V1023", "V4040")),
+  "Tempo2" = tabela_ponderada(c("UF", "V1022", "ECO", "V1023", "Tempo_Atividade")),
+  "Local" = tabela_ponderada(c("UF", "V1022", "V1023", "V4022", "ECO", "V2007")),
+  "Fazenda" = tabela_ponderada(c("UF", "V1022", "V1023", "Fazenda", "V2007", "ECO")),
+  "Loja1" = tabela_ponderada(c("UF", "V1022", "V1023", "Loja", "V2007", "ECO")),
+  "Loja" = tabela_ponderada(c("UF", "V1022", "V1023", "V4020","V4021", "V2007", "ECO")),
+  "Genero" = tabela_ponderada(c("ECO", "V1022", "UF", "V1023", "V2007")),
+  "Cor" = tabela_ponderada(c("UF", "V1022", "ECO", "V2010", "V1023")),
+  "Atividade" = tabela_ponderada(c("VD4010", "V1022", "UF", "V1023", "ECO")),
+  "Ramo" = tabela_ponderada(c("VD4011", "V1022", "UF", "V1023", "ECO")),
+  "Local2" = tabela_ponderada(c("VD4012", "V2007", "V1022", "V1023", "Local_Trabalho", "UF", "ECO")),
+  "CBO"= tabela_ponderada(c("V4010","V1022","UF","V1023","ECO")),
+  "Horas"= tabela_ponderada(c("VD4036","V1022","UF","ECO","V1023")),
+  "Idade"= tabela_ponderada(c("ID","V1022","UF","ECO","V1023")),
+  "Fx_Rend"= tabela_ponderada(c("ECO","V1022","UF","V1023","VD4012","V403311")),
+  "Escolaridade"= tabela_ponderada(c("VD3004","V1022","UF","ECO","V1023")),
+  "CNPJ"= tabela_ponderada(c("ECO", "V1022", "V1023", "UF", "V4019")),
+  "Contribuinte"= tabela_ponderada(c("VD4012","V1022","UF","ECO","V1023"))
+)
+
+# Exportar para Excel
+write_xlsx(tabs, path = "PNAD_Resumo3.xlsx")
+
+
+
+```
+#
+### 4.Variáveis de renda
+#
+```{r}
+# 1. Função robusta corrigida
+resumo_stats <- function(by_vars) {
+  vars_check <- c("VD4016", by_vars)
+
+  # Filtrar apenas casos com todas as variáveis não NA
+  dados_validos <- pnadc_design$variables %>% 
+    select(all_of(vars_check)) %>% 
+    complete.cases()
+
+  # Subconjunto filtrado do objeto survey
+  design_filtrado <- subset(pnadc_design, dados_validos)
+
+  # Calcular média se houver dados válidos
+  if (nrow(design_filtrado$variables) > 0) {
+    svyby(
+      ~VD4016,
+      by = as.formula(paste("~", paste(by_vars, collapse = " + "))),
+      design = design_filtrado,
+      FUN = svymean,
+      keep.var = FALSE,
+      na.rm = TRUE
+    ) %>% as.data.frame()
+  } else {
+    warning("Sem dados válidos para cálculo de média com essas variáveis.")
+    return(data.frame())
+  }
+}
+
+# 2. Criar lista com tabelas de médias
+tabela <- list()
+
+tabela[["ECO_UF"]]   <- resumo_stats(c("ECO", "UF", "V1022", "V1023", "V2007", "V2010"))
+tabela[["ECO_BR"]]   <- resumo_stats(c("ECO", "V1022", "V1023", "V2007", "V2010"))
+tabela[["GRL_UF1"]] <- resumo_stats(c("UF", "V1022", "V1023", "VD4009"))
+tabela[["GRL_BR1"]] <- resumo_stats(c("V1022", "V1023", "VD4009"))
+tabela[["GRL_UF2"]] <- resumo_stats(c("UF", "V1022", "V1023", "Posicao"))
+tabela[["GRL_BR2"]] <- resumo_stats(c("V1022","V1023","Posicao"))
+
+# 3. Exportar para Excel
+write_xlsx(tabela, path = "PNAD_Resumo4.xlsx")
+```
+
+
