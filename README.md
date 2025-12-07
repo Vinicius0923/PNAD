@@ -1,4 +1,4 @@
-# PNAD Economia Popular
+## PNAD Economia Popular
 Análises estatísticas e produção de tabelas a partir dos microdados da PNAD Contínua, com foco em indicadores relacionados à Economia Popular no Brasil.
 
 ## 👤 Autor
